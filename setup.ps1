@@ -9,14 +9,16 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
 function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 function Fail($msg)     { Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
 
+# ---- Where the project lives and where the files come from ----
 $RepoRaw    = 'https://raw.githubusercontent.com/ItzMeShadow999/Ci-CG.MCP/main'
 $RepoFiles  = 'README.md', 'setup.ps1', 'worker.js', 'wrangler.toml'
-$ProjectDir = Join-Path $env:USERPROFILE 'Downloads\Ci-CG.MCP'   
+$ProjectDir = Join-Path $env:USERPROFILE 'Downloads\Ci-CG.MCP'   # = C:\Users\<you>\Downloads\Ci-CG.MCP
 
 Step 0 'Downloading project files'
 if (-not (Test-Path $ProjectDir)) { New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null }
 foreach ($f in $RepoFiles) {
   $dest = Join-Path $ProjectDir $f
+  # Don't overwrite this script while it is running from the same location
   if ($PSCommandPath -and ($PSCommandPath -eq $dest)) {
     Write-Host "Skipping $f (currently running)."
     continue
@@ -42,10 +44,10 @@ if (-not (Get-Command npx -ErrorAction SilentlyContinue)) { Fail 'npx not found 
 Write-Host "Node $(node --version) found."
 
 Step 1 'Cloudflare login'
-$who = (& npx --yes wrangler whoami 2>&1 | Out-String)
+$who = (& npx --yes wrangler@latest whoami 2>&1 | Out-String)
 if ($who -match 'not authenticated|You are not logged in') {
   Write-Host 'A browser window will open. Log in and click Allow.'
-  & npx --yes wrangler login
+  & npx --yes wrangler@latest login
   if ($LASTEXITCODE -ne 0) { Fail 'Cloudflare login failed.' }
 } else {
   Write-Host 'Already logged in to Cloudflare.'
@@ -113,10 +115,19 @@ if (-not (Test-Path $gi) -or -not (Select-String -Path $gi -Pattern '^ACCESS_KEY
 }
 
 Step 4 'Deploying your worker'
-$deployArgs = @('--yes', 'wrangler', 'deploy')
+$deployArgs = @('--yes', 'wrangler@latest', 'deploy')
 if ($ReadOnly) { $deployArgs += @('--var', 'READ_ONLY:true') }
-$deployOut = (& npx @deployArgs 2>&1 | Tee-Object -Variable deployLog | Out-String)
-if ($LASTEXITCODE -ne 0) { Fail "Deploy failed. Output above." }
+$deployOut = (& npx @deployArgs 2>&1 | ForEach-Object { Write-Host $_; $_ } | Out-String)
+if ($LASTEXITCODE -ne 0) {
+  if ($deployOut -match 'workers\.dev subdomain') {
+    Write-Host "`nHint: open https://dash.cloudflare.com > Workers & Pages once and pick a workers.dev subdomain, then run this again." -ForegroundColor Yellow
+  } elseif ($deployOut -match 'more than one account|CLOUDFLARE_ACCOUNT_ID') {
+    Write-Host "`nHint: you have several Cloudflare accounts. Run:  `$env:CLOUDFLARE_ACCOUNT_ID = 'your-account-id'  then run this again." -ForegroundColor Yellow
+  } elseif ($deployOut -match 'Authentication error|10000|not authenticated') {
+    Write-Host "`nHint: Cloudflare login is missing or expired. Run:  npx wrangler@latest login  then run this again." -ForegroundColor Yellow
+  }
+  Fail 'Deploy failed. See the wrangler output printed above.'
+}
 $workerUrl = $null
 if ($deployOut -match 'https://[A-Za-z0-9.-]+\.workers\.dev') { $workerUrl = $Matches[0] }
 
@@ -125,7 +136,7 @@ $tmp = Join-Path $env:TEMP ("ci-secrets-" + [guid]::NewGuid().ToString('N') + '.
 try {
   $json = @{ GITHUB_TOKEN = $ghToken; ACCESS_KEY = $accessKey } | ConvertTo-Json -Compress
   [IO.File]::WriteAllText($tmp, $json, (New-Object Text.UTF8Encoding($false)))
-  & npx --yes wrangler secret bulk $tmp
+  & npx --yes wrangler@latest secret bulk $tmp
   if ($LASTEXITCODE -ne 0) { Fail 'Uploading secrets failed.' }
 } finally {
   if (Test-Path $tmp) { Remove-Item $tmp -Force }
