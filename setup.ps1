@@ -4,6 +4,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+try {
+  & chcp 65001 > $null
+  $utf8 = New-Object Text.UTF8Encoding($false)
+  [Console]::OutputEncoding = $utf8
+  [Console]::InputEncoding  = $utf8
+  $OutputEncoding = $utf8
+} catch { }
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
 function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
@@ -117,17 +124,30 @@ if (-not (Test-Path $gi) -or -not (Select-String -Path $gi -Pattern '^ACCESS_KEY
 Step 4 'Deploying your worker'
 $deployArgs = @('--yes', 'wrangler@latest', 'deploy')
 if ($ReadOnly) { $deployArgs += @('--var', 'READ_ONLY:true') }
-$deployOut = (& npx @deployArgs 2>&1 | ForEach-Object { Write-Host $_; $_ } | Out-String)
-if ($LASTEXITCODE -ne 0) {
-  if ($deployOut -match 'workers\.dev subdomain') {
-    Write-Host "`nHint: open https://dash.cloudflare.com > Workers & Pages once and pick a workers.dev subdomain, then run this again." -ForegroundColor Yellow
-  } elseif ($deployOut -match 'more than one account|CLOUDFLARE_ACCOUNT_ID') {
+
+function Invoke-Deploy {
+  $out = (& npx @deployArgs 2>&1 | ForEach-Object { $line = "$_"; $clean = ($line -replace '[^\x09\x20-\x7E]', '').TrimEnd(); if ($clean) { Write-Host $clean }; $line } | Out-String)
+  return @{ Out = $out; Code = $LASTEXITCODE }
+}
+
+$r = Invoke-Deploy
+if ($r.Code -ne 0 -and $r.Out -match 'workers\.dev subdomain') {
+  Write-Host "`nYour Cloudflare account has no workers.dev subdomain yet. Opening the page to create one." -ForegroundColor Yellow
+  Write-Host 'On the page: pick your account if asked, then click Change next to "Your subdomain" (or set one up), confirm it, and come back here.'
+  $onboard = 'https://dash.cloudflare.com/?to=/:account/workers-and-pages'
+  Start-Process $onboard
+  Read-Host 'Press Enter here once the subdomain is registered'
+  $r = Invoke-Deploy
+}
+if ($r.Code -ne 0) {
+  if ($r.Out -match 'more than one account|CLOUDFLARE_ACCOUNT_ID') {
     Write-Host "`nHint: you have several Cloudflare accounts. Run:  `$env:CLOUDFLARE_ACCOUNT_ID = 'your-account-id'  then run this again." -ForegroundColor Yellow
-  } elseif ($deployOut -match 'Authentication error|10000|not authenticated') {
+  } elseif ($r.Out -match 'Authentication error|10000|not authenticated') {
     Write-Host "`nHint: Cloudflare login is missing or expired. Run:  npx wrangler@latest login  then run this again." -ForegroundColor Yellow
   }
   Fail 'Deploy failed. See the wrangler output printed above.'
 }
+$deployOut = $r.Out
 $workerUrl = $null
 if ($deployOut -match 'https://[A-Za-z0-9.-]+\.workers\.dev') { $workerUrl = $Matches[0] }
 
@@ -136,7 +156,7 @@ $tmp = Join-Path $env:TEMP ("ci-secrets-" + [guid]::NewGuid().ToString('N') + '.
 try {
   $json = @{ GITHUB_TOKEN = $ghToken; ACCESS_KEY = $accessKey } | ConvertTo-Json -Compress
   [IO.File]::WriteAllText($tmp, $json, (New-Object Text.UTF8Encoding($false)))
-  & npx --yes wrangler@latest secret bulk $tmp
+  & npx --yes wrangler@latest secret bulk $tmp 2>&1 | ForEach-Object { $c = ("$_" -replace '[^\x09\x20-\x7E]', '').TrimEnd(); if ($c) { Write-Host $c } }
   if ($LASTEXITCODE -ne 0) { Fail 'Uploading secrets failed.' }
 } finally {
   if (Test-Path $tmp) { Remove-Item $tmp -Force }
