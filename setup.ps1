@@ -9,16 +9,14 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
 function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 function Fail($msg)     { Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
 
-# ---- Where the project lives and where the files come from ----
 $RepoRaw    = 'https://raw.githubusercontent.com/ItzMeShadow999/Ci-CG.MCP/main'
 $RepoFiles  = 'README.md', 'setup.ps1', 'worker.js', 'wrangler.toml'
-$ProjectDir = Join-Path $env:USERPROFILE 'Downloads\Ci-CG.MCP'   # = C:\Users\<you>\Downloads\Ci-CG.MCP
+$ProjectDir = Join-Path $env:USERPROFILE 'Downloads\Ci-CG.MCP'   
 
 Step 0 'Downloading project files'
 if (-not (Test-Path $ProjectDir)) { New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null }
 foreach ($f in $RepoFiles) {
   $dest = Join-Path $ProjectDir $f
-  # Don't overwrite this script while it is running from the same location
   if ($PSCommandPath -and ($PSCommandPath -eq $dest)) {
     Write-Host "Skipping $f (currently running)."
     continue
@@ -54,10 +52,27 @@ if ($who -match 'not authenticated|You are not logged in') {
 }
 
 Step 2 'GitHub token'
-$tokenUrl = 'https://github.com/settings/tokens/new?scopes=repo&description=commitment-issues-mcp'
+$allScopes = @(
+  'repo','repo:status','repo_deployment','public_repo','repo:invite','security_events',
+  'workflow','write:packages','read:packages','delete:packages',
+  'admin:org','write:org','read:org','manage_runners:org',
+  'admin:public_key','write:public_key','read:public_key',
+  'admin:repo_hook','write:repo_hook','read:repo_hook','admin:org_hook',
+  'gist','notifications','user','read:user','user:email','user:follow',
+  'delete_repo','write:discussion','read:discussion',
+  'admin:enterprise','manage_runners:enterprise','manage_billing:enterprise','read:enterprise','scim:enterprise',
+  'audit_log','read:audit_log','codespace','codespace:secrets',
+  'copilot','manage_billing:copilot',
+  'write:network_configurations','read:network_configurations',
+  'project','read:project',
+  'admin:gpg_key','write:gpg_key','read:gpg_key',
+  'admin:ssh_signing_key','write:ssh_signing_key','read:ssh_signing_key'
+)
+$scopeParam = [uri]::EscapeDataString($allScopes -join ',')
+$tokenUrl = "https://github.com/settings/tokens/new?scopes=$scopeParam&description=commitment-issues-mcp"
 Write-Host 'Opening GitHub. On that page:'
 Write-Host '  - pick an expiration (your choice)'
-Write-Host '  - leave the "repo" scope ticked'
+Write-Host '  - all scopes are pre-ticked (leave them as they are)'
 Write-Host '  - click "Generate token" and copy it'
 Start-Process $tokenUrl
 $secure = Read-Host 'Paste your GitHub token here (input is hidden)' -AsSecureString
