@@ -4,14 +4,38 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -Path $PSScriptRoot
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
 function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 function Fail($msg)     { Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
 
-Step 0 'Checking files and tools'
+# ---- Where the project lives and where the files come from ----
+$RepoRaw    = 'https://raw.githubusercontent.com/ItzMeShadow999/Ci-CG.MCP/main'
+$RepoFiles  = 'README.md', 'setup.ps1', 'worker.js', 'wrangler.toml'
+$ProjectDir = Join-Path $env:USERPROFILE 'Downloads\Ci-CG.MCP'   # = C:\Users\<you>\Downloads\Ci-CG.MCP
+
+Step 0 'Downloading project files'
+if (-not (Test-Path $ProjectDir)) { New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null }
+foreach ($f in $RepoFiles) {
+  $dest = Join-Path $ProjectDir $f
+  # Don't overwrite this script while it is running from the same location
+  if ($PSCommandPath -and ($PSCommandPath -eq $dest)) {
+    Write-Host "Skipping $f (currently running)."
+    continue
+  }
+  try {
+    Invoke-WebRequest -Uri "$RepoRaw/$f" -OutFile $dest -UseBasicParsing
+    Write-Host "Downloaded $f"
+  } catch {
+    Fail "Could not download $f from $RepoRaw. $($_.Exception.Message)"
+  }
+}
+Set-Location -Path $ProjectDir
+Write-Host "Project folder: $ProjectDir" -ForegroundColor Green
+
+Step '0b' 'Checking files and tools'
 foreach ($f in 'worker.js', 'wrangler.toml') {
-  if (-not (Test-Path $f)) { Fail "$f not found. Run this script from the project folder." }
+  if (-not (Test-Path $f)) { Fail "$f is missing from $ProjectDir." }
 }
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
   Fail 'Node.js is not installed. Get it from https://nodejs.org (LTS), then run this again.'
@@ -55,7 +79,7 @@ try {
 }
 
 Step 3 'Access key'
-$keyFile = Join-Path $PSScriptRoot 'ACCESS_KEY.txt'
+$keyFile = Join-Path $ProjectDir 'ACCESS_KEY.txt'
 if (Test-Path $keyFile) {
   $accessKey = (Get-Content $keyFile -Raw).Trim()
   Write-Host 'Reusing existing ACCESS_KEY.txt.'
@@ -68,7 +92,7 @@ if (Test-Path $keyFile) {
   Write-Host "Generated a new key and saved it to ACCESS_KEY.txt"
 }
 
-$gi = Join-Path $PSScriptRoot '.gitignore'
+$gi = Join-Path $ProjectDir '.gitignore'
 if (-not (Test-Path $gi) -or -not (Select-String -Path $gi -Pattern '^ACCESS_KEY\.txt$' -Quiet)) {
   Add-Content -Path $gi -Value 'ACCESS_KEY.txt'
 }
